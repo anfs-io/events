@@ -50,7 +50,7 @@ Every `io.anfs` type's data is a flat object of string values (SPEC.md §1.2); a
 
 | Type | Scope | Subject | Actor | Data |
 | --- | --- | --- | --- | --- |
-| `source.updated` | `host` | the source's alias (`core`) | who ran the update | `from`, `to` (the HEAD commit before and after) |
+| `source.updated` | `host` | the source's alias (`core`) | who ran the update, or `anfsd` when a merge it performed moved the source | `from`, `to` (the HEAD commit before and after) |
 
 ### Runs (anfsd: the supervisor)
 
@@ -60,10 +60,11 @@ A run is one agent started by a dispatch rule. Scope: the rule's space. Subject:
 | --- | --- |
 | `run.submitted` | `rule`, `role`, `harness`, `event` (the id of the event that matched), `job` (when the rule makes one) |
 | `run.rejected` | `rule`, `reason` (`stale`, `rate`, `queue`, `loop`), `event` |
-| `run.working` | `rule`, `harness`, `attempt`, `job` and `branch` (when the rule makes a job) |
-| `run.completed` | `rule`, `job`, `commits` (`<repo>:<count>` per repo, space-separated; `?` when unknown), `summary`, and the run usage below |
-| `run.failed` | `rule`, `job`, `reason` (`exit`, `timeout`, `spawn`, `orphaned`, or a preparation failure), `exit` (the exit status, when there is one), `detail`, `attempt`, `retry` (`<n> of <m>` when it will be retried), and the run usage when known |
-| `run.canceled` | `rule`, `job`, `by` |
+| `run.working` | `rule`, `harness`, `attempt`, `job` and `branch` (when the rule makes a job); after the harness ended, `step` (`verify`, `merge`, `install`, `push`: the landing step under way) |
+| `run.auth-required` | `rule`, `job`, `step` (the landing step waiting), `approval` (the approval id): the run waits on the person (A2A's `auth-required`); not written when the approval is answered `auto` |
+| `run.completed` | `rule`, `job`, `commits` (`<repo>:<count>` per repo, space-separated; `?` when unknown), `summary`, `landed` and `skipped` (the landing steps done and skipped, comma-separated), and the run usage below |
+| `run.failed` | `rule`, `job`, `reason` (`exit`, `timeout`, `spawn`, `orphaned`, a preparation failure, or a landing step's: `verify`, `merge`, `install`, `push`, `expired`), `exit` (the exit status, when there is one), `detail`, `attempt`, `retry` (`<n> of <m>` when it will be retried), and the run usage when known |
+| `run.canceled` | `rule`, `job`, `by`, `reason` (`refused`: its approval was refused) |
 
 **Run usage** on `run.completed`, and on `run.failed` when known; each key is left out when the harness does not report it:
 
@@ -73,6 +74,25 @@ A run is one agent started by a dispatch rule. Scope: the rule's space. Subject:
 | `input_tokens` | every prompt token the model processed, cached or not (decimal) | `gen_ai.usage.input_tokens` |
 | `output_tokens` | output tokens (decimal) | `gen_ai.usage.output_tokens` |
 | `cost_usd` | the harness's own cost figure in US dollars, an estimate (decimal, `1.8423`) | |
+
+### Approvals (anfsd: the lander)
+
+An approval is a step of landing a run's work (or a job worked by hand) that waits on who answers it. Scope: the run's space, `host` for a request with no run. Subject: the approval id (a UUIDv7). Actor: `anfsd`, or the answerer for `approval.given` and `approval.refused` (with `actorspace` and `actorrole` when it acts as a role). Every type has `step` (`merge`, `install`, `push`, `policy`), and `run`, `rule`, `job` when it comes from a run.
+
+| Type | Data, besides the above |
+| --- | --- |
+| `approval.requested` | `to` (`person`), `policy`, `trigger` (the id of the event that started the run), `report`; per step: `repos`, `bases`, `heads`, `commits`, `files` (merge: `<repo>=<value>`, comma-separated), `packages` (install), `repos`, `remote` (push), `was`, `now` (policy) |
+| `approval.given` | `via` (`cli`, `ui`, `auto`), `through` (`install` or `push`: the later steps given with it), `from` (the approval it was given through) |
+| `approval.refused` | `via`, `reason` |
+| `approval.expired` | `reason` (`moved`, `diverged`, `gone`, `canceled`, `superseded`), `detail` |
+| `approval.done` | `result` |
+| `approval.failed` | `reason` (the step, or `interrupted`), `detail` |
+
+### Inbox (anfsd: unhandled work)
+
+| Type | Scope | Subject | Actor | Data |
+| --- | --- | --- | --- | --- |
+| `inbox.dismissed` | the rule's space | the run id | the answerer | `run`, `rule`, `trigger`, `reason`, `via` |
 
 ### Containers and pods (anfsd: the podman follower)
 

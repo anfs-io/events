@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.1.0",
   "examples": [
     {"file": "valid/report-filed.jsonl", "valid": true, "rule": null, "schema": null, "subject": "anfs.k3x7q2mbzp.anfs.report.filed", "key": null, "about": "io.anfs.report.filed as anfs report writes it (runtime's bash.jsonl, line 1)"},
     {"file": "valid/report-filed-test.jsonl", "valid": true, "rule": null, "schema": null, "subject": "anfs.abcde23456.anfs.report.filed", "key": null, "about": "io.anfs.report.filed with quotes, a backslash and a tab escaped in data (runtime's bash.jsonl, line 2)"},
@@ -9,6 +9,9 @@
     {"file": "valid/no-subject.jsonl", "valid": true, "rule": null, "schema": null, "subject": "anfs.host.anfs.podman.connected", "key": null, "about": "io.anfs.podman.connected: no subject and empty data, from this host's spool"},
     {"file": "valid/role-only.jsonl", "valid": true, "rule": null, "schema": null, "subject": "anfs.abcde23456.anfs.report.filed", "key": null, "about": "actorrole without actorspace, as the bash emitter writes a role in a space with no id (from this host's spool)"},
     {"file": "valid/run-completed.jsonl", "valid": true, "rule": null, "schema": null, "subject": "anfs.tkj76y3nfx.anfs.run.completed", "key": null, "about": "io.anfs.run.completed by anfsd with the run usage keys"},
+    {"file": "valid/run-auth-required.jsonl", "valid": true, "rule": null, "schema": null, "subject": "anfs.tkj76y3nfx.anfs.run.auth-required", "key": null, "about": "io.anfs.run.auth-required by anfsd: a run's merge waits on the person (agents/04a, core's emitter)"},
+    {"file": "valid/approval-requested.jsonl", "valid": true, "rule": null, "schema": null, "subject": "anfs.tkj76y3nfx.anfs.approval.requested", "key": null, "about": "io.anfs.approval.requested by anfsd for a run's merge: the per-repo keys as <repo>=<value> (agents/04a)"},
+    {"file": "valid/approval-given.jsonl", "valid": true, "rule": null, "schema": null, "subject": "anfs.tkj76y3nfx.anfs.approval.given", "key": null, "about": "io.anfs.approval.given by the answerer, via the CLI (agents/04a)"},
     {"file": "valid/as-role.jsonl", "valid": true, "rule": null, "schema": null, "subject": "anfs.tkj76y3nfx.anfs.report.filed", "key": null, "about": "actorspace with actorrole: the actor acted as maintainer of that space"},
     {"file": "valid/unknown-extension.jsonl", "valid": true, "rule": null, "schema": null, "subject": "anfs.tkj76y3nfx.anfs.report.filed", "key": null, "about": "extensions no registry entry names (a string, an integer and a boolean): valid, readers ignore them"},
     {"file": "valid/actorclaimed.jsonl", "valid": true, "rule": null, "schema": null, "subject": "anfs.tkj76y3nfx.anfs.report.filed", "key": null, "about": "a run's event stamped by anfsd (02d): the attested actor, actorrun, and the forged claim kept in actorclaimed"},

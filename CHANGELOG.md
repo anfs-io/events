@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0
+
+A minor version: types added to anfs's catalog (REGISTRY.md), with examples. Every v1.0.0-valid event stays valid; the schema is unchanged.
+
+- Landing (agents/04a): `run.auth-required`; the approvals `approval.requested`, `.given`, `.refused`, `.expired`, `.done`, `.failed`; `inbox.dismissed`. New data keys on runs: `run.working` `step`, `run.completed` `landed` and `skipped`, `run.canceled` `reason`, and `run.failed`'s landing reasons. `source.updated` may have actor `anfsd`. Examples: `run-auth-required`, `approval-requested`, `approval-given`.
+
 ## 1.0.0
 
 The first version of the spec, `anfsv` 1, moved out of anfs (anfs-io/docs `units/agents/01-events/plan.md`, "The envelope") and opened to every layer. Every event anfs has written so far stays valid.

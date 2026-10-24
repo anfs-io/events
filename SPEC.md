@@ -1,6 +1,6 @@
 # anfs events, profile v1
 
-Version 1.0.0 (`anfsv` 1).
+Version 1.1.0 (`anfsv` 1).
 
 This is the contract for events on the anfs bus: one CloudEvents 1.0 profile shared by every layer built on ANFS (anfs itself, cnfs's Rails apps, lgat's indexer, and whatever comes next). It says what an event is, who may name its types, how an event gets onto the bus, and what a consumer can rely on. It is language-neutral. anfs (`anfsd` and core's `lib/anfs/events.sh`) is the reference implementation on a development host; other implementations follow this text, `schema/event.v1.json` and the examples in `examples/`.
 
