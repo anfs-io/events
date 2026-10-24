@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""Check the examples against the manifest, the line rules and the schema.
+
+Usage: tools/check [--no-schema]
+       tools/check --derive-id TIME KEY
+
+From the repository's root or anywhere: paths are the script's. Python 3.9 or later, the standard
+library only; the schema part runs check-jsonschema from PATH (tools/requirements.txt pins it), or
+is skipped with --no-schema.
+
+What it checks:
+- examples/index.json lists every file under examples/valid and examples/invalid once, and nothing
+  else; each entry has file, valid, rule, schema, subject, key, about.
+- The line rules (SPEC.md, "Conformance"), which a JSON Schema cannot express, on every example:
+  a valid example breaks none of them (its rule is null, or noncanonical when it is flagged for
+  the spool); an invalid example whose schema is false breaks the rule the manifest names.
+- A valid example's subject is the NATS subject its source and type give (SPEC.md, "Subjects").
+- A valid example with a key has the id derived from that key and its time (SPEC.md, "Derived
+  ids").
+- The schema: it is a valid draft 2020-12 schema; every valid example passes it; every invalid
+  example with schema true fails it, and every one with schema false passes it (the line rules
+  are what catch those).
+
+--derive-id prints the derived id for TIME (RFC 3339, milliseconds, Z) and KEY.
+
+Exit 0 when everything holds, 1 with one line per failure (FILE: message) otherwise.
+"""
+
+import datetime
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+EXAMPLES = os.path.join(ROOT, "examples")
+SCHEMA = os.path.join(ROOT, "schema", "event.v1.json")
+
+MAX = 4096  # bytes, with the newline
+INT53 = 2**53 - 1
+UUID7 = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+TIME = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$")
+SOURCE = re.compile(r"^/[a-z][a-z0-9-]*/(host|spaces/([a-z0-9]{10}))(/[A-Za-z0-9._~-]+)*$")
+TYPE = re.compile(r"^io\.[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$")
+FIELDS = ["file", "valid", "rule", "schema", "subject", "key", "about"]
+
+
+def time_of_ms(ms):
+    t = datetime.datetime.fromtimestamp(ms // 1000, datetime.timezone.utc)
+    return t.strftime("%Y-%m-%dT%H:%M:%S.") + "%03dZ" % (ms % 1000)
+
+
+def ms_of_time(t):
+    d = datetime.datetime.strptime(t, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=datetime.timezone.utc)
+    return (int(d.timestamp()) * 1000) + d.microsecond // 1000
+
+
+def derive_id(time, key):
+    """SPEC.md, Derived ids: the time's milliseconds, then the first 74 bits of SHA-256(key)."""
+    h = int.from_bytes(hashlib.sha256(key.encode("utf-8")).digest(), "big") >> (256 - 74)
+    rand_a, rand_b = h >> 62, h & ((1 << 62) - 1)
+    u = (ms_of_time(time) << 80) | (7 << 76) | (rand_a << 64) | (2 << 62) | rand_b
+    x = "%032x" % u
+    return "-".join([x[:8], x[8:12], x[12:16], x[16:20], x[20:]])
+
+
+def nats_subject(ev):
+    """SPEC.md, Subjects: anfs.<scope>. + the type without io."""
+    m = SOURCE.match(ev.get("source", "")) if isinstance(ev.get("source"), str) else None
+    if not m or not isinstance(ev.get("type"), str) or not TYPE.match(ev["type"]):
+        return None
+    return "anfs." + (m.group(2) or "host") + "." + ev["type"][3:]
+
+
+class Duplicate(Exception):
+    pass
+
+
+def pairs(ps):
+    keys = [k for k, _ in ps]
+    if len(keys) != len(set(keys)):
+        raise Duplicate(sorted({k for k in keys if keys.count(k) > 1}))
+    return dict(ps)
+
+
+def no_constant(name):
+    raise ValueError("%s is not JSON" % name)
+
+
+def big_ints(v):
+    if isinstance(v, bool):
+        return False
+    if isinstance(v, int):
+        return abs(v) > INT53
+    if isinstance(v, dict):
+        return any(big_ints(x) for x in v.values())
+    if isinstance(v, list):
+        return any(big_ints(x) for x in v)
+    return False
+
+
+def compact(text):
+    """No whitespace outside strings."""
+    in_str = esc = False
+    for c in text:
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c in " \t\r\n":
+            return False
+    return True
+
+
+def line_rules(raw):
+    """The rules a JSON Schema cannot express: the set of rule codes this serialized event breaks.
+    noncanonical is among them when the event is valid JSON but not in the canonical form."""
+    broken = set()
+    body = raw[:-1] if raw.endswith(b"\n") else raw
+    if len(body) + 1 > MAX:
+        broken.add("size.max")
+    if b"\n" in body or b"\r" in body:
+        broken.add("line.one")
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        broken.add("json.utf8")
+        return broken, None
+    try:
+        ev = json.loads(text, object_pairs_hook=pairs, parse_constant=no_constant)
+    except Duplicate:
+        broken.add("json.unique")
+        ev = json.loads(text, parse_constant=no_constant)
+    except ValueError:
+        broken.add("json.parse")
+        return broken, None
+    if not isinstance(ev, dict):
+        broken.add("json.object")
+        return broken, None
+    i, t = ev.get("id"), ev.get("time")
+    if isinstance(i, str) and isinstance(t, str) and UUID7.match(i) and TIME.match(t):
+        if time_of_ms(int(i.replace("-", "")[:12], 16)) != t:
+            broken.add("time.id")
+    if isinstance(ev.get("data"), dict) and big_ints(ev["data"]):
+        broken.add("data.int53")
+    a = ev.get("actor")
+    if isinstance(a, str) and len(a.encode("utf-8")) > 128:
+        broken.add("actor.form")
+    c = ev.get("actorclaimed")
+    if isinstance(c, str) and isinstance(a, str):
+        stamp = a
+        if isinstance(ev.get("actorrole"), str):
+            stamp += " as %s/%s" % (ev.get("actorspace", ""), ev["actorrole"])
+        if c == stamp:
+            broken.add("actorclaimed.same")
+    keys = list(ev.keys())
+    canonical = compact(text) and keys and keys[-1] == "data" and re.search(r'[{,]"anfsv":1[,}]', text)
+    if not canonical:
+        broken.add("noncanonical")
+    return broken, ev
+
+
+def schema_run(checker, files):
+    """check-jsonschema on each file: {file: passed}."""
+    out = {}
+    for f in files:
+        r = subprocess.run(
+            [checker, "--schemafile", SCHEMA, "--default-filetype", "json", os.path.join(EXAMPLES, f)],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        )
+        out[f] = r.returncode == 0
+    return out
+
+
+def main(argv):
+    if argv[:1] == ["--derive-id"] and len(argv) == 3:
+        print(derive_id(argv[1], argv[2]))
+        return 0
+    if argv not in ([], ["--no-schema"]):
+        sys.stderr.write(__doc__.split("\n\n")[1] + "\n")
+        return 2
+    fails = []
+
+    def fail(where, msg):
+        fails.append("%s: %s" % (where, msg))
+
+    with open(os.path.join(EXAMPLES, "index.json"), encoding="utf-8") as f:
+        index = json.load(f)
+    entries = index.get("examples", [])
+    listed = [e.get("file") for e in entries]
+    on_disk = sorted(
+        os.path.join(d, n) for d in ("valid", "invalid") for n in os.listdir(os.path.join(EXAMPLES, d))
+    )
+    for f in sorted(set(on_disk) - set(listed)):
+        fail(f, "not in examples/index.json")
+    for f in sorted(set(listed) - set(on_disk)):
+        fail(f, "in examples/index.json but no such file")
+    for f in sorted({f for f in listed if listed.count(f) > 1}):
+        fail(f, "listed more than once")
+
+    for e in entries:
+        f = e.get("file", "?")
+        if sorted(e) != sorted(FIELDS):
+            fail(f, "manifest fields %s, not %s" % (sorted(e), sorted(FIELDS)))
+            continue
+        if f not in on_disk:
+            continue
+        if f.startswith("valid/") != (e["valid"] is True):
+            fail(f, "valid is %s for a file under %s" % (e["valid"], f.split("/")[0]))
+        with open(os.path.join(EXAMPLES, f), "rb") as fh:
+            raw = fh.read()
+        if not raw.endswith(b"\n"):
+            fail(f, "does not end with a newline")
+        broken, ev = line_rules(raw)
+        if e["valid"]:
+            if e["schema"] is not None:
+                fail(f, "schema is set on a valid example")
+            if e["rule"] not in (None, "noncanonical"):
+                fail(f, "rule %r on a valid example (null or noncanonical)" % e["rule"])
+            flagged = "noncanonical" in broken
+            if flagged != (e["rule"] == "noncanonical"):
+                fail(f, "canonical form: flagged %s, manifest says %r" % (flagged, e["rule"]))
+            for r in sorted(broken - {"noncanonical"}):
+                fail(f, "valid example breaks %s" % r)
+            if ev is None:
+                continue
+            want = nats_subject(ev)
+            if not e["subject"]:
+                fail(f, "no subject in the manifest")
+            elif e["subject"] != want:
+                fail(f, "subject %s, the event gives %s" % (e["subject"], want))
+            if e["key"] is not None and derive_id(ev["time"], e["key"]) != ev["id"]:
+                fail(f, "id %s is not derived from its key (%s)" % (ev["id"], derive_id(ev["time"], e["key"])))
+        else:
+            if not e["rule"] or not isinstance(e["schema"], bool):
+                fail(f, "an invalid example needs a rule and schema true or false")
+                continue
+            if e["subject"] is not None or e["key"] is not None:
+                fail(f, "subject and key are for valid examples")
+            if not e["schema"] and e["rule"] not in broken:
+                fail(f, "the line rules do not catch %s (they find %s)" % (e["rule"], sorted(broken) or "nothing"))
+
+    if argv != ["--no-schema"]:
+        checker = shutil.which("check-jsonschema")
+        if not checker:
+            fail("schema", "check-jsonschema is not on PATH (tools/requirements.txt; or --no-schema)")
+        else:
+            r = subprocess.run([checker, "--check-metaschema", SCHEMA], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            if r.returncode != 0:
+                fail("schema/event.v1.json", "not a valid schema:\n" + r.stdout.decode())
+            files = [e["file"] for e in entries if sorted(e) == sorted(FIELDS) and e["file"] in on_disk]
+            passed = schema_run(checker, files)
+            for e in entries:
+                f = e.get("file")
+                if f not in passed:
+                    continue
+                if e["valid"] and not passed[f]:
+                    fail(f, "the schema refuses a valid example")
+                elif not e["valid"] and e["schema"] is True and passed[f]:
+                    fail(f, "the schema passes it (manifest: schema true)")
+                elif not e["valid"] and e["schema"] is False and not passed[f]:
+                    fail(f, "the schema refuses it (manifest: schema false)")
+
+    for line in fails:
+        print(line)
+    n_valid = sum(1 for e in entries if e.get("valid"))
+    schema = "" if argv == ["--no-schema"] else ", schema"
+    print("%d examples (%d valid, %d invalid): %s" % (
+        len(entries), n_valid, len(entries) - n_valid,
+        "%d failures" % len(fails) if fails else "ok (manifest, line rules, subjects, derived ids%s)" % schema))
+    return 1 if fails else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
