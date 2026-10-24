@@ -1,6 +1,6 @@
 # events
 
-The ANFS event spec: one CloudEvents 1.0 profile for every layer built on ANFS (anfs, cnfs, lgat, and those to come). It is the contract, and nothing else: no implementation code lives here. A tag of this repository is a version of the spec.
+The ANFS event spec: one CloudEvents 1.0 profile for every layer built on ANFS. It is the contract, and nothing else: no implementation code lives here. A tag of this repository is a version of the spec.
 
 ```
 SPEC.md                 the profile: the event, types and namespaces, space ids and sources, actors,
@@ -33,6 +33,50 @@ tools/check --derive-id 2026-10-24T09:40:17.000Z 'io.lgat.escrow.payment.settled
 ```
 
 CI (`.github/workflows/ci.yml`) runs the same on every push and pull request.
+
+### From Ruby
+
+An implementation's own spec, with a tag's `schema/` and `examples/` vendored into `spec/fixtures/events` (gems: `json_schemer`, `rspec`). Valid examples must pass the schema and map to the manifest's subject; invalid ones the schema can express must fail it; the rest are for your own line-rule validator.
+
+```ruby
+# spec/events_conformance_spec.rb: a Ruby implementation checked against a vendored tag of
+# anfs-io/events (spec/fixtures/events: schema/, examples/, VERSION).
+require "json"
+require "json_schemer"
+
+EVENTS = File.expand_path("fixtures/events", __dir__)
+SCHEMA = JSONSchemer.schema(Pathname("#{EVENTS}/schema/event.v1.json"))
+MANIFEST = JSON.parse(File.read("#{EVENTS}/examples/index.json"))
+
+# subject = "anfs.<scope>." + the type without "io."; scope = the space id in source, or host
+def nats_subject(event)
+  scope = event["source"][%r{\A/[a-z][a-z0-9-]*/(?:spaces/([a-z0-9]{10})|host)(?:/|\z)}, 1] || "host"
+  "anfs.#{scope}.#{event["type"].delete_prefix("io.")}"
+end
+
+RSpec.describe "anfs-io/events #{MANIFEST["version"]}" do
+  MANIFEST["examples"].each do |ex|
+    line = File.read("#{EVENTS}/examples/#{ex["file"]}").chomp
+
+    if ex["valid"]
+      it "#{ex["file"]} is valid, on #{ex["subject"]}" do
+        event = JSON.parse(line)
+        expect(SCHEMA.valid?(event)).to be(true), SCHEMA.validate(event).map { _1["error"] }.join("; ")
+        expect(nats_subject(event)).to eq(ex["subject"])
+      end
+    elsif ex["schema"]
+      it "#{ex["file"]} fails the schema (#{ex["rule"]})" do
+        event = JSON.parse(line) rescue skip("not JSON: the line rules' job")
+        expect(SCHEMA.valid?(event)).to be(false)
+      end
+    else
+      # A rule the schema cannot express (SPEC.md's conformance table): size, one line, time = the
+      # id's milliseconds, ... Your own validator must refuse these; the schema alone accepts them.
+      it "#{ex["file"]} is refused by the line rules (#{ex["rule"]})", skip: "wire your validator here"
+    end
+  end
+end
+```
 
 ## Versions
 
