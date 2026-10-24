@@ -94,6 +94,16 @@ An approval is a step of landing a run's work (or a job worked by hand) that wai
 | --- | --- | --- | --- | --- |
 | `inbox.dismissed` | the rule's space | the run id | the answerer | `run`, `rule`, `trigger`, `reason`, `via` |
 
+### Leases (core: `wsm lease`)
+
+A lease is a role held in a space by one process at a time (a coordinator session, say). Scope: the lease's space. Subject: the role (`coordinator`). Actor: the claimant, as its emitter detects it (`claude:<session8>` in a Claude Code session). `actorspace` and `actorrole` (the role) on `lease.claimed` and `lease.released`: the actor acts as that role from then, or did until then. A renewal is not an event.
+
+| Type | When | Data |
+| --- | --- | --- |
+| `lease.claimed` | a claim took a free, released, expired or dead lease (not a claim again by the same holder) | `claim` (the claim id, a UUIDv7: the lease's fencing token), `kind` (`claude`, `herdr`, `firstmate`, `shell`), `session` (the holder's own session id, opaque), `pid` (decimal), `from` (`free`, `released`, `expired`, `dead`), `previous` (the previous holder's actor, when there was one) |
+| `lease.released` | the holder gave it up | `claim`, `reason` (`explicit`, `session-end`, `clear`) |
+| `lease.expired` | written by the taker just before its `lease.claimed`, when it takes an expired or dead lease | `claim` (the old claim), `holder` (the old holder's actor), `why` (`ttl`, `dead`, `reused`: the pid runs another process), `renewed` (the last renewal, UTC) |
+
 ### Containers and pods (anfsd: the podman follower)
 
 Scope: `host`. Actor: `podman`. Subject: the container's or pod's name.

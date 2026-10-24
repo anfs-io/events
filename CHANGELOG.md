@@ -5,6 +5,7 @@
 A minor version: types added to anfs's catalog (REGISTRY.md), with examples. Every v1.0.0-valid event stays valid; the schema is unchanged.
 
 - Landing (agents/04a): `run.auth-required`; the approvals `approval.requested`, `.given`, `.refused`, `.expired`, `.done`, `.failed`; `inbox.dismissed`. New data keys on runs: `run.working` `step`, `run.completed` `landed` and `skipped`, `run.canceled` `reason`, and `run.failed`'s landing reasons. `source.updated` may have actor `anfsd`. Examples: `run-auth-required`, `approval-requested`, `approval-given`.
+- Leases (agents/06a, core's `wsm lease`): `lease.claimed`, `lease.released`, `lease.expired`. Examples: `lease-claimed`, `lease-expired`, `lease-released`.
 
 ## 1.0.0
 
